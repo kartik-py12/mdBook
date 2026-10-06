@@ -9,8 +9,37 @@ use std::fs::read_to_string;
 use std::path::Path;
 use std::process::{Command, Output};
 
+/// Creates a `Command` for an npm-provided executable (such as `npm` or `npx`).
+///
+/// On Windows these are batch files (`npm.cmd`), which `Command` does not
+/// find when given just `npm`.
+fn npm_command(name: &str) -> Command {
+    if cfg!(windows) {
+        Command::new(format!("{name}.cmd"))
+    } else {
+        Command::new(name)
+    }
+}
+
+/// Converts a directory path to a `file://` URI that ends in a `/`.
+///
+/// On Windows this uses forward slashes and a leading `/` before the drive
+/// letter (`file:///C:/foo/`), which is the form browsers report.
+fn dir_to_file_uri(dir: &Path) -> String {
+    let path = dir.display().to_string().replace('\\', "/");
+    let mut uri = if path.starts_with('/') {
+        format!("file://{path}")
+    } else {
+        format!("file:///{path}")
+    };
+    if !uri.ends_with('/') {
+        uri.push('/');
+    }
+    uri
+}
+
 fn get_available_browser_ui_test_version_inner(global: bool) -> Option<String> {
-    let mut command = Command::new("npm");
+    let mut command = npm_command("npm");
     command
         .arg("list")
         .arg("--parseable")
@@ -23,7 +52,9 @@ fn get_available_browser_ui_test_version_inner(global: bool) -> Option<String> {
     let lines = String::from_utf8_lossy(&stdout);
     lines
         .lines()
-        .find_map(|l| l.split(':').nth(1)?.strip_prefix("browser-ui-test@"))
+        // The version is the last `:`-separated field. Don't count from the
+        // front, since Windows paths contain a `:` after the drive letter.
+        .find_map(|l| l.rsplit(':').next()?.strip_prefix("browser-ui-test@"))
         .map(std::borrow::ToOwned::to_owned)
 }
 
@@ -107,11 +138,8 @@ fn check_status(cmd: &Command, output: &Output) {
 }
 
 fn run_browser_ui_test(out_dir: &Path) {
-    let mut command = Command::new("npx");
-    let mut doc_path = format!("file://{}", out_dir.display());
-    if !doc_path.ends_with('/') {
-        doc_path.push('/');
-    }
+    let mut command = npm_command("npx");
+    let doc_path = dir_to_file_uri(out_dir);
     command
         .arg("browser-ui-test")
         .args(["--variable", "DOC_PATH", doc_path.as_str()])
